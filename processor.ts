@@ -6,6 +6,7 @@
 import sharp from "sharp";
 import { QuantizerCelebi, Score, argbFromRgb } from "@material/material-color-utilities";
 import { Storage } from "@google-cloud/storage";
+import { Buffer } from "node:buffer";
 
 interface Device {
   name: string;

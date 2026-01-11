@@ -10,7 +10,8 @@
     "sharp": "npm:sharp@0.33.5"
   },
   "compilerOptions": {
-    "lib": ["deno.window", "deno.unstable"]
+    "lib": ["deno.window", "deno.unstable"],
+    "types": ["npm:@types/node"]
   },
   "allowScripts": ["npm:sharp@0.33.5"]
 }
