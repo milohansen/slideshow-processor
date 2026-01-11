@@ -13,7 +13,7 @@ const TASK_ATTEMPT = parseInt(Deno.env.get("CLOUD_RUN_TASK_ATTEMPT") || "0");
 // Configuration from environment
 const GCS_BUCKET_NAME = Deno.env.get("GCS_BUCKET_NAME");
 const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
-const BACKEND_AUTH_TOKEN = Deno.env.get("BACKEND_AUTH_TOKEN");
+// const BACKEND_AUTH_TOKEN = Deno.env.get("BACKEND_AUTH_TOKEN");
 
 interface PendingImage {
   id: string;
@@ -43,7 +43,7 @@ async function fetchPendingImages(): Promise<PendingImage[]> {
 
   const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`, {
     headers: {
-      "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
+      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
     },
   });
 
@@ -65,7 +65,7 @@ async function registerAttempt(imageId: string): Promise<ProcessingStartResponse
   const response = await fetch(`${BACKEND_API_URL}/api/processing-attempts/${imageId}/start`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
+      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ attempt: TASK_ATTEMPT }),
@@ -89,7 +89,7 @@ async function reportFailure(imageId: string, error: string): Promise<void> {
   await fetch(`${BACKEND_API_URL}/api/images/${imageId}/failed`, {
     method: "PATCH",
     headers: {
-      "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
+      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ error, attempt: TASK_ATTEMPT }),
@@ -110,9 +110,9 @@ async function main() {
     throw new Error("BACKEND_API_URL environment variable required");
   }
 
-  if (!BACKEND_AUTH_TOKEN) {
-    throw new Error("BACKEND_AUTH_TOKEN environment variable required");
-  }
+  // if (!BACKEND_AUTH_TOKEN) {
+  //   throw new Error("BACKEND_AUTH_TOKEN environment variable required");
+  // }
 
   try {
     // Fetch all pending images
@@ -144,7 +144,7 @@ async function main() {
           devices: startResponse.devices,
           bucketName: GCS_BUCKET_NAME,
           backendApiUrl: BACKEND_API_URL,
-          authToken: BACKEND_AUTH_TOKEN,
+          // authToken: BACKEND_AUTH_TOKEN,
         });
 
         processed++;

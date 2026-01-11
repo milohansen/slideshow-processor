@@ -24,7 +24,7 @@ interface ProcessImageOptions {
   devices: Device[];
   bucketName: string;
   backendApiUrl: string;
-  authToken: string;
+  // authToken: string;
 }
 
 interface ColorPalette {
@@ -219,12 +219,12 @@ async function saveMetadataToGCS(
 async function submitProcessedImages(
   results: ProcessedImageResult[],
   backendApiUrl: string,
-  authToken: string
+  // authToken: string
 ): Promise<void> {
   const response = await fetch(`${backendApiUrl}/api/processed-images`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${authToken}`,
+      // "Authorization": `Bearer ${authToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ images: results }),
@@ -248,7 +248,7 @@ export async function processImage(options: ProcessImageOptions): Promise<void> 
     devices,
     bucketName,
     backendApiUrl,
-    authToken,
+    // authToken,
   } = options;
 
   // Download original image
@@ -288,7 +288,7 @@ export async function processImage(options: ProcessImageOptions): Promise<void> 
   await saveMetadataToGCS(imageId, bucketName, results);
 
   // Submit results to backend API
-  await submitProcessedImages(results, backendApiUrl, authToken);
+  await submitProcessedImages(results, backendApiUrl /*, authToken*/);
   
   console.log(`   🎉 Completed processing for all ${devices.length} devices`);
 }
