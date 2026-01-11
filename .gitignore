@@ -1,0 +1,33 @@
+# Deno
+.deno/
+# deno.lock
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+.ai
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Processed images
+data/processed/
+data/temp-google-photos/
+
+# Node modules (if needed for any tools)
+node_modules/
+client_secret.json
