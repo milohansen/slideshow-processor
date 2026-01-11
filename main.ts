@@ -62,7 +62,7 @@ async function registerAttempt(imageId: string): Promise<ProcessingStartResponse
     throw new Error("BACKEND_API_URL environment variable required");
   }
 
-  const response = await fetch(`${BACKEND_API_URL}/api/processing-attempts/${imageId}/start`, {
+  const response = await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/start`, {
     method: "POST",
     headers: {
       // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
