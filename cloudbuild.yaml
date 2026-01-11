@@ -27,7 +27,7 @@ steps:
       - '--task-timeout=15m'
       - '--cpu=2'
       - '--memory=2Gi'
-      - '--region=us-central1'
+      - '--region=northamerica-northeast1'
       - '--set-env-vars=GCS_BUCKET_NAME=${_GCS_BUCKET_NAME}'
       - '--set-env-vars=BACKEND_API_URL=${_BACKEND_API_URL}'
       # - '--set-secrets=BACKEND_AUTH_TOKEN=${_BACKEND_AUTH_SECRET}'
