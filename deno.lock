@@ -3,6 +3,7 @@
   "specifiers": {
     "npm:@google-cloud/storage@7.14.0": "7.14.0",
     "npm:@material/material-color-utilities@0.3": "0.3.0",
+    "npm:@types/node@*": "25.0.3",
     "npm:sharp@0.33.5": "0.33.5"
   },
   "npm": {
@@ -659,6 +660,7 @@
     "dependencies": [
       "npm:@google-cloud/storage@7.14.0",
       "npm:@material/material-color-utilities@0.3",
+      "npm:@types/node@*",
       "npm:sharp@0.33.5"
     ]
   }
