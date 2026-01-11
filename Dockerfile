@@ -19,7 +19,7 @@ WORKDIR /app
 
 # Copy cached dependencies from previous stage
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /root/.cache/deno /root/.cache/deno
+# COPY --from=deps /root/.cache/deno /root/.cache/deno
 
 # Enable node_modules directory
 ENV DENO_NODE_MODULES_DIR=auto
