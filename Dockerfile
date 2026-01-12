@@ -10,10 +10,10 @@ COPY deno.json deno.lock ./
 ENV DENO_NODE_MODULES_DIR=auto
 
 # Pre-cache dependencies including source files for proper resolution
-COPY main.ts main-v2.ts processor-v2.ts ./
+COPY main-v2.ts processor-v2.ts ./
 
 # Cache dependencies with lock file
-RUN deno cache --frozen main.ts main-v2.ts processor-v2.ts
+RUN deno cache --frozen main-v2.ts processor-v2.ts
 
 # Final stage
 FROM denoland/deno:2.6.4
