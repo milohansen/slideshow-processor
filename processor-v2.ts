@@ -92,10 +92,11 @@ async function uploadToGCS(buffer: Buffer, path: string, bucketName: string): Pr
 
 /**
  * Extract colors from image buffer
+ * Returns both the ranked color palette and the raw quantized color data
  */
-async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<string[]> {
+async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<{ colors: string[]; quantizedData: Map<number, number> }> {
   // Resize to smaller proxy for performance
-  const { data, info } = await sharp(imageBuffer).resize(maxResolution, maxResolution, { fit: "inside", withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data } = await sharp(imageBuffer).resize(maxResolution, maxResolution, { fit: "inside", withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 
   const pixelData = new Uint8Array(data);
   const pixels: number[] = [];
@@ -114,7 +115,10 @@ async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<
   }
 
   if (pixels.length === 0) {
-    return ["#4285F4"]; // Fallback
+    return { 
+      colors: ["#4285F4"], 
+      quantizedData: new Map([[0xff4285f4, 1]]) 
+    };
   }
 
   // Quantize and score
@@ -126,7 +130,39 @@ async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<
   });
 
   // Convert to hex
-  return rankedColors.map((argb) => "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase());
+  const colors = rankedColors.map((argb) => "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase());
+
+  return { colors, quantizedData: quantized };
+}
+
+/**
+ * Save quantized color data to GCS for later use in paired layouts
+ */
+async function saveQuantizedColors(blobHash: string, quantizedData: Map<number, number>, bucketName: string): Promise<string> {
+  // Convert Map to JSON-serializable object
+  const colorData: Record<string, number> = {};
+  for (const [argb, count] of quantizedData.entries()) {
+    // Store ARGB as hex string for JSON compatibility
+    const hex = "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase();
+    colorData[hex] = count;
+  }
+
+  const jsonContent = JSON.stringify({
+    hash: blobHash,
+    timestamp: new Date().toISOString(),
+    colorCount: quantizedData.size,
+    colors: colorData,
+  }, null, 2);
+
+  const path = `images/quantized/${blobHash}.json`;
+  const file = storage.bucket(bucketName).file(path);
+  await file.save(jsonContent, {
+    metadata: {
+      contentType: "application/json",
+    },
+  });
+
+  return `gs://${bucketName}/${path}`;
 }
 
 /**
@@ -267,9 +303,13 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
 
   // Step 6: Extract colors
   console.log(`  🎨 Extracting colors...`);
-  const colors = await extractColors(originalBuffer);
+  const { colors, quantizedData } = await extractColors(originalBuffer);
   const colorPalette = JSON.stringify(colors);
   const colorSource = colors[0];
+
+  // Step 6b: Save quantized color data for future paired layout combinations
+  const quantizedUri = await saveQuantizedColors(blobHash, quantizedData, bucketName);
+  console.log(`  💾 Saved quantized colors: ${quantizedUri}`);
 
   // Step 7: Generate device variants
   console.log(`  🖼️  Generating variants for ${deviceDimensions.length} device(s)...`);
