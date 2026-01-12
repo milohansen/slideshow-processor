@@ -13,34 +13,43 @@ import sharp from "sharp";
 
 const storage = new Storage();
 
-interface Source {
+type Source = {
   id: string;
   staging_path: string;
   origin: string;
   external_id?: string;
-}
+};
 
-interface DeviceDimensions {
+type DeviceDimensions = {
   width: number;
   height: number;
   orientation: string;
-}
+  layouts?: {
+    type: "single" | "pair-vertical" | "pair-horizontal";
+    width: number;
+    height: number;
+    divider?: number;
+    preferredAspectRatios?: string[];
+    minAspectRatio?: number;
+    maxAspectRatio?: number;
+  }[];
+};
 
-interface ProcessingOptions {
+type ProcessingOptions = {
   source: Source;
   deviceDimensions: DeviceDimensions[];
   bucketName: string;
   backendApiUrl: string;
   checkBlobExists: (hash: string) => Promise<boolean>;
-}
+};
 
-interface ProcessingResult {
+type ProcessingResult = {
   status: "processed" | "duplicate";
   blobHash?: string;
-  blobData?: any;
-  colorData?: any;
-  variants: any[];
-}
+  blobData?: unknown;
+  colorData?: unknown;
+  variants: unknown[];
+};
 
 /**
  * Download file from GCS or local path
@@ -140,6 +149,82 @@ function determineOrientation(width: number, height: number): "portrait" | "land
 }
 
 /**
+ * Calculate crop percentage when fitting an image to target dimensions
+ */
+function calculateCropPercentage(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number
+): number {
+  const sourceRatio = sourceWidth / sourceHeight;
+  const targetRatio = targetWidth / targetHeight;
+  
+  if (Math.abs(sourceRatio - targetRatio) < 0.001) {
+    return 0; // Perfect match, no crop
+  }
+  
+  if (sourceRatio > targetRatio) {
+    // Source is wider - will crop width
+    const usedWidth = targetHeight * sourceRatio;
+    const croppedWidth = usedWidth - targetWidth;
+    return (croppedWidth / usedWidth) * 100;
+  } else {
+    // Source is taller - will crop height
+    const usedHeight = targetWidth / sourceRatio;
+    const croppedHeight = usedHeight - targetHeight;
+    return (croppedHeight / usedHeight) * 100;
+  }
+}
+
+/**
+ * Evaluate which layouts an image is eligible for
+ */
+function evaluateImageLayouts(
+  imageWidth: number,
+  imageHeight: number,
+  layouts: DeviceDimensions["layouts"]
+): Array<{ layoutType: string; width: number; height: number; cropPercentage: number }> {
+  if (!layouts || layouts.length === 0) {
+    return [];
+  }
+
+  const imageRatio = imageWidth / imageHeight;
+  const imageOrientation = determineOrientation(imageWidth, imageHeight);
+  const eligible = [];
+
+  for (const layout of layouts) {
+    // Check aspect ratio constraints
+    if (layout.minAspectRatio !== undefined && imageRatio < layout.minAspectRatio) {
+      continue;
+    }
+    if (layout.maxAspectRatio !== undefined && imageRatio > layout.maxAspectRatio) {
+      continue;
+    }
+
+    // Calculate crop percentage
+    const cropPercentage = calculateCropPercentage(
+      imageWidth,
+      imageHeight,
+      layout.width,
+      layout.height
+    );
+
+    eligible.push({
+      layoutType: layout.type,
+      width: layout.width,
+      height: layout.height,
+      cropPercentage,
+    });
+  }
+
+  // Sort by crop percentage (least crop first)
+  eligible.sort((a, b) => a.cropPercentage - b.cropPercentage);
+  
+  return eligible;
+}
+
+/**
  * Process a single source
  */
 export async function processSourceV2(options: ProcessingOptions): Promise<ProcessingResult> {
@@ -190,35 +275,72 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
   const colorSource = colors[0];
 
   // Step 7: Generate device variants
-  console.log(`  🖼️  Generating ${deviceDimensions.length} variants...`);
+  console.log(`  🖼️  Generating variants for ${deviceDimensions.length} device(s)...`);
   const variants = [];
 
   for (const device of deviceDimensions) {
-    try {
-      // Resize for device
-      const resizedBuffer = await sharp(originalBuffer)
-        .resize(device.width, device.height, {
-          fit: "cover",
-          position: "entropy", // Smart crop
-        })
-        .jpeg({ quality: 90 })
-        .toBuffer();
+    // If device has layouts, generate variants for each eligible layout
+    if (device.layouts && device.layouts.length > 0) {
+      const eligibleLayouts = evaluateImageLayouts(width, height, device.layouts);
+      
+      console.log(`    Device ${device.width}x${device.height}: ${eligibleLayouts.length} eligible layout(s)`);
+      
+      for (const layout of eligibleLayouts) {
+        try {
+          // Resize for this layout
+          const resizedBuffer = await sharp(originalBuffer)
+            .resize(layout.width, layout.height, {
+              fit: "cover",
+              position: "entropy", // Smart crop
+            })
+            .jpeg({ quality: 90 })
+            .toBuffer();
 
-      // Upload variant
-      const variantPath = `processed/${device.width}x${device.height}/${blobHash}.jpg`;
-      const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
+          // Upload variant
+          const variantPath = `processed/${layout.layoutType}/${layout.width}x${layout.height}/${blobHash}.jpg`;
+          const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
 
-      variants.push({
-        width: device.width,
-        height: device.height,
-        orientation: device.orientation,
-        storage_path: variantGcsUri,
-        file_size: resizedBuffer.length,
-      });
+          variants.push({
+            width: layout.width,
+            height: layout.height,
+            orientation: determineOrientation(layout.width, layout.height),
+            layout_type: layout.layoutType,
+            storage_path: variantGcsUri,
+            file_size: resizedBuffer.length,
+          });
 
-      console.log(`    ✓ ${device.width}x${device.height}`);
-    } catch (error) {
-      console.error(`    ✗ ${device.width}x${device.height}: ${error.message}`);
+          console.log(`      ✓ ${layout.layoutType}: ${layout.width}x${layout.height} (crop: ${layout.cropPercentage.toFixed(1)}%)`);
+        } catch (error) {
+          console.error(`      ✗ ${layout.layoutType} ${layout.width}x${layout.height}: ${error.message}`);
+        }
+      }
+    } else {
+      // Legacy: No layouts defined, generate single variant for device dimensions
+      try {
+        const resizedBuffer = await sharp(originalBuffer)
+          .resize(device.width, device.height, {
+            fit: "cover",
+            position: "entropy",
+          })
+          .jpeg({ quality: 90 })
+          .toBuffer();
+
+        const variantPath = `processed/${device.width}x${device.height}/${blobHash}.jpg`;
+        const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
+
+        variants.push({
+          width: device.width,
+          height: device.height,
+          orientation: device.orientation,
+          layout_type: "single",
+          storage_path: variantGcsUri,
+          file_size: resizedBuffer.length,
+        });
+
+        console.log(`    ✓ ${device.width}x${device.height} (legacy single)`);
+      } catch (error) {
+        console.error(`    ✗ ${device.width}x${device.height}: ${error.message}`);
+      }
     }
   }
 

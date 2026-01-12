@@ -17,18 +17,27 @@ const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
 const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN");
 const GCS_BUCKET_NAME = Deno.env.get("GCS_BUCKET_NAME");
 
-interface Source {
+type Source = {
   id: string;
   staging_path: string;
   origin: string;
   external_id?: string;
-}
+};
 
-interface DeviceDimensions {
+type DeviceDimensions = {
   width: number;
   height: number;
   orientation: string;
-}
+  layouts?: {
+    type: "single" | "pair-vertical" | "pair-horizontal";
+    width: number;
+    height: number;
+    divider?: number;
+    preferredAspectRatios?: string[];
+    minAspectRatio?: number;
+    maxAspectRatio?: number;
+  }[];
+};
 
 /**
  * Fetch sources from batch manifest or backend
