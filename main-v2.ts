@@ -24,19 +24,24 @@ type Source = {
   external_id?: string;
 };
 
+// We might support more complex layout definitions in the future
+// type LayoutSlot = {
+//   width: number;
+//   height: number;
+//   // align?: string; // Same as LVGL `align` property: TOP_LEFT, TOP_MID, TOP_RIGHT, LEFT_MID, CENTER, RIGHT_MID, BOTTOM_LEFT, BOTTOM_MID, BOTTOM_RIGHT
+//   //                 // Not currently used but reserved for future use with more complex layouts
+// };
+
 type DeviceDimensions = {
   width: number;
   height: number;
-  orientation: string;
+  orientation: string; // TODO: remove this, it can be derived from width/height
+  gap?: number; // gap between images in pair layouts
   layouts?: {
-    type: "single" | "pair-vertical" | "pair-horizontal";
-    width: number;
-    height: number;
-    divider?: number;
-    preferredAspectRatios?: string[];
-    minAspectRatio?: number;
-    maxAspectRatio?: number;
-  }[];
+    monotych: true; // single image full screen
+    diptych?: boolean; // two images side by side
+    triptych?: boolean; // three images side by side
+  };
 };
 
 /**
@@ -121,9 +126,9 @@ async function checkBlobExists(hash: string): Promise<boolean> {
 async function finalizeProcessing(data: {
   sourceId: string;
   blobHash: string;
-  blobData: any;
-  colorData: any;
-  variants: any[];
+  blobData: unknown;
+  colorData: unknown;
+  variants: unknown[];
 }): Promise<void> {
   const response = await fetch(`${BACKEND_API_URL}/api/processing/finalize`, {
     method: "POST",

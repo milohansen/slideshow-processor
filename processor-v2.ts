@@ -23,16 +23,13 @@ type Source = {
 type DeviceDimensions = {
   width: number;
   height: number;
-  orientation: string;
+  orientation: string; // TODO: remove this, it can be derived from width/height
+  gap?: number; // gap between images in pair layouts
   layouts?: {
-    type: "single" | "pair-vertical" | "pair-horizontal";
-    width: number;
-    height: number;
-    divider?: number;
-    preferredAspectRatios?: string[];
-    minAspectRatio?: number;
-    maxAspectRatio?: number;
-  }[];
+    monotych: true; // single image full screen
+    diptych?: boolean; // two images side by side
+    triptych?: boolean; // three images side by side
+  };
 };
 
 type ProcessingOptions = {
@@ -179,42 +176,56 @@ function calculateCropPercentage(
 
 /**
  * Evaluate which layouts an image is eligible for
+ * Returns layout configurations with calculated dimensions and crop percentages
  */
 function evaluateImageLayouts(
   imageWidth: number,
   imageHeight: number,
-  layouts: DeviceDimensions["layouts"]
+  device: DeviceDimensions
 ): Array<{ layoutType: string; width: number; height: number; cropPercentage: number }> {
-  if (!layouts || layouts.length === 0) {
-    return [];
+  const layouts = device.layouts;
+  if (!layouts) {
+    // Default to monotych (full screen single image)
+    return [{
+      layoutType: "monotych",
+      width: device.width,
+      height: device.height,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, device.width, device.height),
+    }];
   }
 
-  const imageRatio = imageWidth / imageHeight;
-  const imageOrientation = determineOrientation(imageWidth, imageHeight);
   const eligible = [];
+  const gap = device.gap || 0;
 
-  for (const layout of layouts) {
-    // Check aspect ratio constraints
-    if (layout.minAspectRatio !== undefined && imageRatio < layout.minAspectRatio) {
-      continue;
-    }
-    if (layout.maxAspectRatio !== undefined && imageRatio > layout.maxAspectRatio) {
-      continue;
-    }
-
-    // Calculate crop percentage
-    const cropPercentage = calculateCropPercentage(
-      imageWidth,
-      imageHeight,
-      layout.width,
-      layout.height
-    );
-
+  // Always include monotych (single image full screen)
+  if (layouts.monotych) {
     eligible.push({
-      layoutType: layout.type,
-      width: layout.width,
-      height: layout.height,
-      cropPercentage,
+      layoutType: "monotych",
+      width: device.width,
+      height: device.height,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, device.width, device.height),
+    });
+  }
+
+  // Diptych (two images side by side)
+  if (layouts.diptych) {
+    const diptychWidth = Math.floor((device.width - gap) / 2);
+    eligible.push({
+      layoutType: "diptych",
+      width: diptychWidth,
+      height: device.height,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, diptychWidth, device.height),
+    });
+  }
+
+  // Triptych (three images side by side)
+  if (layouts.triptych) {
+    const triptychWidth = Math.floor((device.width - gap * 2) / 3);
+    eligible.push({
+      layoutType: "triptych",
+      width: triptychWidth,
+      height: device.height,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, triptychWidth, device.height),
     });
   }
 
@@ -279,67 +290,37 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
   const variants = [];
 
   for (const device of deviceDimensions) {
-    // If device has layouts, generate variants for each eligible layout
-    if (device.layouts && device.layouts.length > 0) {
-      const eligibleLayouts = evaluateImageLayouts(width, height, device.layouts);
-      
-      console.log(`    Device ${device.width}x${device.height}: ${eligibleLayouts.length} eligible layout(s)`);
-      
-      for (const layout of eligibleLayouts) {
-        try {
-          // Resize for this layout
-          const resizedBuffer = await sharp(originalBuffer)
-            .resize(layout.width, layout.height, {
-              fit: "cover",
-              position: "entropy", // Smart crop
-            })
-            .jpeg({ quality: 90 })
-            .toBuffer();
-
-          // Upload variant
-          const variantPath = `processed/${layout.layoutType}/${layout.width}x${layout.height}/${blobHash}.jpg`;
-          const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
-
-          variants.push({
-            width: layout.width,
-            height: layout.height,
-            orientation: determineOrientation(layout.width, layout.height),
-            layout_type: layout.layoutType,
-            storage_path: variantGcsUri,
-            file_size: resizedBuffer.length,
-          });
-
-          console.log(`      ✓ ${layout.layoutType}: ${layout.width}x${layout.height} (crop: ${layout.cropPercentage.toFixed(1)}%)`);
-        } catch (error) {
-          console.error(`      ✗ ${layout.layoutType} ${layout.width}x${layout.height}: ${error.message}`);
-        }
-      }
-    } else {
-      // Legacy: No layouts defined, generate single variant for device dimensions
+    const eligibleLayouts = evaluateImageLayouts(width, height, device);
+    
+    console.log(`    Device ${device.width}x${device.height}: ${eligibleLayouts.length} eligible layout(s)`);
+    
+    for (const layout of eligibleLayouts) {
       try {
+        // Resize for this layout
         const resizedBuffer = await sharp(originalBuffer)
-          .resize(device.width, device.height, {
+          .resize(layout.width, layout.height, {
             fit: "cover",
-            position: "entropy",
+            position: "entropy", // Smart crop
           })
           .jpeg({ quality: 90 })
           .toBuffer();
 
-        const variantPath = `processed/${device.width}x${device.height}/${blobHash}.jpg`;
+        // Upload variant
+        const variantPath = `processed/${layout.layoutType}/${layout.width}x${layout.height}/${blobHash}.jpg`;
         const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
 
         variants.push({
-          width: device.width,
-          height: device.height,
-          orientation: device.orientation,
-          layout_type: "single",
+          width: layout.width,
+          height: layout.height,
+          orientation: determineOrientation(layout.width, layout.height),
+          layout_type: layout.layoutType,
           storage_path: variantGcsUri,
           file_size: resizedBuffer.length,
         });
 
-        console.log(`    ✓ ${device.width}x${device.height} (legacy single)`);
+        console.log(`      ✓ ${layout.layoutType}: ${layout.width}x${layout.height} (crop: ${layout.cropPercentage.toFixed(1)}%)`);
       } catch (error) {
-        console.error(`    ✗ ${device.width}x${device.height}: ${error.message}`);
+        console.error(`      ✗ ${layout.layoutType} ${layout.width}x${layout.height}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
