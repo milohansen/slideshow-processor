@@ -13,7 +13,7 @@ ENV DENO_NODE_MODULES_DIR=auto
 COPY main.ts main-v2.ts processor.ts ./
 
 # Cache dependencies with lock file
-RUN deno cache --frozen main.ts main-v2.ts processor.ts
+RUN deno cache --frozen main.ts main-v2.ts processor-v2.ts
 
 # Final stage
 FROM denoland/deno:2.6.4
