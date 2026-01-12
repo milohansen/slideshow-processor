@@ -7,6 +7,8 @@
   "imports": {
     "@google-cloud/storage": "npm:@google-cloud/storage@7.14.0",
     "@material/material-color-utilities": "npm:@material/material-color-utilities@^0.3.0",
+    "@std/crypto": "jsr:@std/crypto@^1.0.5",
+    "@std/encoding": "jsr:@std/encoding@^1.0.10",
     "sharp": "npm:sharp@0.33.5"
   },
   "compilerOptions": {

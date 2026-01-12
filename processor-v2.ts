@@ -7,8 +7,7 @@ import { Storage } from "@google-cloud/storage";
 import { QuantizerCelebi, Score, argbFromRgb } from "@material/material-color-utilities";
 import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
-import { ensureDir } from "@std/fs";
-import { join } from "@std/path";
+import { Buffer } from "node:buffer";
 import sharp from "sharp";
 
 const storage = new Storage();
@@ -51,14 +50,14 @@ type ProcessingResult = {
 /**
  * Download file from GCS or local path
  */
-async function downloadSource(stagingPath: string, bucketName: string): Promise<Buffer> {
+async function downloadSource(stagingPath: string): Promise<Buffer> {
   if (stagingPath.startsWith("gs://")) {
     // Parse GCS URI
     const match = stagingPath.match(/^gs:\/\/([^\/]+)\/(.+)$/);
     if (!match) {
       throw new Error(`Invalid GCS URI: ${stagingPath}`);
     }
-    
+
     const [, bucket, path] = match;
     const file = storage.bucket(bucket).file(path);
     const [contents] = await file.download();
@@ -96,11 +95,7 @@ async function uploadToGCS(buffer: Buffer, path: string, bucketName: string): Pr
  */
 async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<string[]> {
   // Resize to smaller proxy for performance
-  const { data, info } = await sharp(imageBuffer)
-    .resize(maxResolution, maxResolution, { fit: "inside", withoutEnlargement: true })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  const { data, info } = await sharp(imageBuffer).resize(maxResolution, maxResolution, { fit: "inside", withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 
   const pixelData = new Uint8Array(data);
   const pixels: number[] = [];
@@ -131,9 +126,7 @@ async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<
   });
 
   // Convert to hex
-  return rankedColors.map(argb => 
-    "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase()
-  );
+  return rankedColors.map((argb) => "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase());
 }
 
 /**
@@ -148,19 +141,14 @@ function determineOrientation(width: number, height: number): "portrait" | "land
 /**
  * Calculate crop percentage when fitting an image to target dimensions
  */
-function calculateCropPercentage(
-  sourceWidth: number,
-  sourceHeight: number,
-  targetWidth: number,
-  targetHeight: number
-): number {
+function calculateCropPercentage(sourceWidth: number, sourceHeight: number, targetWidth: number, targetHeight: number): number {
   const sourceRatio = sourceWidth / sourceHeight;
   const targetRatio = targetWidth / targetHeight;
-  
+
   if (Math.abs(sourceRatio - targetRatio) < 0.001) {
     return 0; // Perfect match, no crop
   }
-  
+
   if (sourceRatio > targetRatio) {
     // Source is wider - will crop width
     const usedWidth = targetHeight * sourceRatio;
@@ -178,20 +166,18 @@ function calculateCropPercentage(
  * Evaluate which layouts an image is eligible for
  * Returns layout configurations with calculated dimensions and crop percentages
  */
-function evaluateImageLayouts(
-  imageWidth: number,
-  imageHeight: number,
-  device: DeviceDimensions
-): Array<{ layoutType: string; width: number; height: number; cropPercentage: number }> {
+function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: DeviceDimensions): Array<{ layoutType: string; width: number; height: number; cropPercentage: number }> {
   const layouts = device.layouts;
   if (!layouts) {
     // Default to monotych (full screen single image)
-    return [{
-      layoutType: "monotych",
-      width: device.width,
-      height: device.height,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, device.width, device.height),
-    }];
+    return [
+      {
+        layoutType: "monotych",
+        width: device.width,
+        height: device.height,
+        cropPercentage: calculateCropPercentage(imageWidth, imageHeight, device.width, device.height),
+      },
+    ];
   }
 
   const eligible = [];
@@ -231,7 +217,7 @@ function evaluateImageLayouts(
 
   // Sort by crop percentage (least crop first)
   eligible.sort((a, b) => a.cropPercentage - b.cropPercentage);
-  
+
   return eligible;
 }
 
@@ -243,7 +229,7 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
 
   // Step 1: Download original
   console.log(`  📥 Downloading from ${source.staging_path}`);
-  const originalBuffer = await downloadSource(source.staging_path, bucketName);
+  const originalBuffer = await downloadSource(source.staging_path);
 
   // Step 2: Calculate hash (fingerprint)
   const blobHash = await calculateHash(originalBuffer);
@@ -291,9 +277,9 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
 
   for (const device of deviceDimensions) {
     const eligibleLayouts = evaluateImageLayouts(width, height, device);
-    
+
     console.log(`    Device ${device.width}x${device.height}: ${eligibleLayouts.length} eligible layout(s)`);
-    
+
     for (const layout of eligibleLayouts) {
       try {
         // Resize for this layout
