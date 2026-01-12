@@ -1,161 +1,116 @@
 /**
- * Image Processor V2 - Batch Manifest Processing
- * Entry point that processes sources from batch manifest
+ * Image Processor Cloud Run Job v2
+ * Processes a single image specified by TARGET_FILE_ID environment variable
+ * Triggered by Cloud Workflow via Cloud Tasks
  */
 
-import { processSourceV2 } from "./processor-v2.ts";
+import { processImage } from "./processor.ts";
 
 // Cloud Run Jobs environment variables
-const TASK_INDEX = parseInt(Deno.env.get("CLOUD_RUN_TASK_INDEX") || "0");
-const TASK_COUNT = parseInt(Deno.env.get("CLOUD_RUN_TASK_COUNT") || "1");
-const TASK_ATTEMPT = parseInt(Deno.env.get("CLOUD_RUN_TASK_ATTEMPT") || "0");
-
-// Batch configuration from environment
-const BATCH_ID = Deno.env.get("BATCH_ID");
-const SOURCE_IDS_JSON = Deno.env.get("SOURCE_IDS");
-const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
-const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN");
+const TARGET_FILE_ID = Deno.env.get("TARGET_FILE_ID");
 const GCS_BUCKET_NAME = Deno.env.get("GCS_BUCKET_NAME");
+const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
 
-type Source = {
+interface ProcessingStartResponse {
+  attempt: number;
+  devices: Array<{
+    name: string;
+    width: number;
+    height: number;
+    orientation: string;
+  }>;
+}
+
+interface ImageDetails {
   id: string;
-  staging_path: string;
-  origin: string;
-  external_id?: string;
-};
-
-// We might support more complex layout definitions in the future
-// type LayoutSlot = {
-//   width: number;
-//   height: number;
-//   // align?: string; // Same as LVGL `align` property: TOP_LEFT, TOP_MID, TOP_RIGHT, LEFT_MID, CENTER, RIGHT_MID, BOTTOM_LEFT, BOTTOM_MID, BOTTOM_RIGHT
-//   //                 // Not currently used but reserved for future use with more complex layouts
-// };
-
-type DeviceDimensions = {
+  file_path: string;
   width: number;
   height: number;
-  orientation: string; // TODO: remove this, it can be derived from width/height
-  gap?: number; // gap between images in pair layouts
-  layouts?: {
-    monotych: true; // single image full screen
-    diptych?: boolean; // two images side by side
-    triptych?: boolean; // three images side by side
-  };
-};
-
-/**
- * Fetch sources from batch manifest or backend
- */
-async function fetchSourcesToProcess(): Promise<Source[]> {
-  // If SOURCE_IDS provided, fetch those specific sources
-  if (SOURCE_IDS_JSON) {
-    const sourceIds: string[] = JSON.parse(SOURCE_IDS_JSON);
-    console.log(`📋 Processing ${sourceIds.length} sources from batch manifest`);
-    
-    // Fetch source details from backend
-    const response = await fetch(`${BACKEND_API_URL}/api/processing/staged?limit=1000`, {
-      headers: {
-        "Authorization": `Bearer ${AUTH_TOKEN}`,
-      },
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch sources: ${response.statusText}`);
-    }
-    
-    const { sources } = await response.json();
-    return sources.filter((s: Source) => sourceIds.includes(s.id));
-  }
-  
-  // Otherwise fetch all staged sources
-  console.log(`📋 Fetching all staged sources from backend`);
-  const response = await fetch(`${BACKEND_API_URL}/api/processing/staged?limit=100`, {
-    headers: {
-      "Authorization": `Bearer ${AUTH_TOKEN}`,
-    },
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Failed to fetch staged sources: ${response.statusText}`);
-  }
-  
-  const { sources } = await response.json();
-  return sources;
+  orientation: string;
+  processing_status: string;
 }
 
 /**
- * Fetch device dimensions from backend
+ * Fetch image details from backend
  */
-async function fetchDeviceDimensions(): Promise<DeviceDimensions[]> {
-  const response = await fetch(`${BACKEND_API_URL}/api/processing/device-dimensions`, {
-    headers: {
-      "Authorization": `Bearer ${AUTH_TOKEN}`,
-    },
-  });
+async function fetchImageDetails(imageId: string): Promise<ImageDetails> {
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
+  }
+
+  const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`);
   
   if (!response.ok) {
-    throw new Error(`Failed to fetch device dimensions: ${response.statusText}`);
+    throw new Error(`Failed to fetch image details: ${response.statusText}`);
+  }
+
+  const images = await response.json() as ImageDetails[];
+  const image = images.find(img => img.id === imageId);
+  
+  if (!image) {
+    throw new Error(`Image ${imageId} not found or not pending`);
   }
   
-  const { devices } = await response.json();
-  return devices;
+  return image;
 }
 
 /**
- * Check if blob hash exists (duplicate detection)
+ * Register processing attempt with backend
  */
-async function checkBlobExists(hash: string): Promise<boolean> {
-  const response = await fetch(`${BACKEND_API_URL}/api/processing/check-hash/${hash}`, {
-    headers: {
-      "Authorization": `Bearer ${AUTH_TOKEN}`,
-    },
-  });
-  
-  if (!response.ok) {
-    return false;
+async function registerAttempt(imageId: string, attempt: number): Promise<ProcessingStartResponse> {
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
   }
-  
-  const { exists } = await response.json();
-  return exists;
-}
 
-/**
- * Report processing completion
- */
-async function finalizeProcessing(data: {
-  sourceId: string;
-  blobHash: string;
-  blobData: unknown;
-  colorData: unknown;
-  variants: unknown[];
-}): Promise<void> {
-  const response = await fetch(`${BACKEND_API_URL}/api/processing/finalize`, {
+  const response = await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/start`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify({ attempt }),
   });
-  
+
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to finalize: ${error}`);
+    throw new Error(`Failed to register attempt for ${imageId}: ${response.statusText}`);
   }
+
+  return await response.json();
 }
 
 /**
- * Report processing failure
+ * Report task failure after max retries to backend
  */
-async function reportFailure(sourceId: string, error: string): Promise<void> {
-  await fetch(`${BACKEND_API_URL}/api/processing/fail`, {
+async function reportMaxRetriesFailed(imageId: string, error: string, attemptCount: number): Promise<void> {
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
+  }
+
+  await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/failed`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ sourceId, error }),
+    body: JSON.stringify({ 
+      error_message: error,
+      attempt_count: attemptCount,
+    }),
+  });
+}
+
+/**
+ * Report transient failure to backend
+ */
+async function reportTransientFailure(imageId: string, error: string, attempt: number): Promise<void> {
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
+  }
+
+  await fetch(`${BACKEND_API_URL}/api/images/${imageId}/failed`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ error, attempt }),
   });
 }
 
@@ -163,92 +118,69 @@ async function reportFailure(sourceId: string, error: string): Promise<void> {
  * Main entry point
  */
 async function main() {
-  console.log(`🚀 Processor V2 - Task ${TASK_INDEX}/${TASK_COUNT} (attempt ${TASK_ATTEMPT})`);
-  console.log(`📦 Batch ID: ${BATCH_ID || "auto"}`);
+  const MAX_RETRIES = 3;
+  const TASK_ATTEMPT = parseInt(Deno.env.get("CLOUD_RUN_TASK_ATTEMPT") || "0") + 1;
 
-  // Validate environment
-  if (!BACKEND_API_URL) {
-    throw new Error("BACKEND_API_URL environment variable required");
+  console.log(`🚀 Image Processor v2 starting (attempt ${TASK_ATTEMPT}/${MAX_RETRIES})`);
+
+  if (!TARGET_FILE_ID) {
+    throw new Error("TARGET_FILE_ID environment variable required");
   }
+
   if (!GCS_BUCKET_NAME) {
     throw new Error("GCS_BUCKET_NAME environment variable required");
   }
 
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
+  }
+
+  const imageId = TARGET_FILE_ID;
+
   try {
-    // Fetch sources and device dimensions
-    const [allSources, deviceDimensions] = await Promise.all([
-      fetchSourcesToProcess(),
-      fetchDeviceDimensions(),
-    ]);
-    
-    console.log(`📋 Total sources: ${allSources.length}`);
-    console.log(`📱 Device dimensions: ${deviceDimensions.length}`);
+    console.log(`\n🖼️  Processing image ${imageId}`);
 
-    // Shard: Each task processes its assigned subset
-    const mySources = allSources.filter((_, index) => index % TASK_COUNT === TASK_INDEX);
-    console.log(`📦 Task ${TASK_INDEX} processing ${mySources.length} sources`);
+    // Fetch image details
+    const image = await fetchImageDetails(imageId);
+    console.log(`   Found image: ${image.file_path}`);
 
-    let processed = 0;
-    let skipped = 0;
-    let failed = 0;
+    // Register attempt and get device list
+    const startResponse = await registerAttempt(imageId, TASK_ATTEMPT);
+    console.log(`   Targeting ${startResponse.devices.length} devices`);
 
-    for (const source of mySources) {
-      try {
-        console.log(`\n🖼️  Processing source ${source.id} (${processed + skipped + 1}/${mySources.length})`);
-        
-        const result = await processSourceV2({
-          source,
-          deviceDimensions,
-          bucketName: GCS_BUCKET_NAME,
-          backendApiUrl: BACKEND_API_URL,
-          checkBlobExists,
-        });
+    // Process image for all devices
+    await processImage({
+      imageId: image.id,
+      sourcePath: image.file_path,
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+      sourceOrientation: image.orientation,
+      devices: startResponse.devices,
+      bucketName: GCS_BUCKET_NAME,
+      backendApiUrl: BACKEND_API_URL,
+    });
 
-        if (result.status === "duplicate") {
-          skipped++;
-          console.log(`   ⏭️  Skipped (duplicate): ${result.blobHash}`);
-          
-          // Still finalize to link source to existing blob
-          await finalizeProcessing({
-            sourceId: source.id,
-            blobHash: result.blobHash!,
-            blobData: null,
-            colorData: null,
-            variants: [],
-          });
-        } else {
-          // Report results to backend
-          await finalizeProcessing({
-            sourceId: source.id,
-            blobHash: result.blobHash!,
-            blobData: result.blobData,
-            colorData: result.colorData,
-            variants: result.variants,
-          });
-          
-          processed++;
-          console.log(`   ✅ Success: ${result.variants.length} variants created`);
-        }
-      } catch (error) {
-        failed++;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`   ❌ Failed: ${errorMessage}`);
-        
-        try {
-          await reportFailure(source.id, errorMessage);
-        } catch (reportError) {
-          console.error(`   ⚠️  Failed to report error:`, reportError);
-        }
-      }
-    }
+    console.log(`   ✅ Successfully processed ${imageId}`);
+    console.log(`\n✨ Job complete`);
 
-    console.log(`\n✨ Task ${TASK_INDEX} complete: ${processed} processed, ${skipped} skipped, ${failed} failed`);
-    
-    if (failed > 0) {
-      Deno.exit(1);
-    }
   } catch (error) {
-    console.error(`💥 Task ${TASK_INDEX} fatal error:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`   ❌ Processing failed: ${errorMessage}`);
+
+    try {
+      if (TASK_ATTEMPT >= MAX_RETRIES) {
+        // Max retries reached - record as failed task
+        console.log(`   ⚠️  Max retries reached, recording failed task`);
+        await reportMaxRetriesFailed(imageId, errorMessage, TASK_ATTEMPT);
+      } else {
+        // Transient failure - will be retried by Cloud Run Jobs
+        await reportTransientFailure(imageId, errorMessage, TASK_ATTEMPT);
+      }
+    } catch (reportError) {
+      console.error(`   ⚠️  Failed to report error to backend:`, reportError);
+    }
+
+    console.error(`\n💥 Job failed: ${errorMessage}`);
     Deno.exit(1);
   }
 }

@@ -1,27 +1,16 @@
 /**
- * Image Processor Cloud Run Job
- * Entry point that handles task sharding and batch coordination
+ * Image Processor Cloud Run Service
+ * HTTP server that processes individual images via Cloud Tasks
  */
 
+import { Hono } from "hono";
+import { logger } from "hono/logger";
 import { processImage } from "./processor.ts";
 
-// Cloud Run Jobs environment variables for task sharding
-const TASK_INDEX = parseInt(Deno.env.get("CLOUD_RUN_TASK_INDEX") || "0");
-const TASK_COUNT = parseInt(Deno.env.get("CLOUD_RUN_TASK_COUNT") || "1");
-const TASK_ATTEMPT = parseInt(Deno.env.get("CLOUD_RUN_TASK_ATTEMPT") || "0");
-
 // Configuration from environment
+const PORT = Number(Deno.env.get("PORT")) || 8080;
 const GCS_BUCKET_NAME = Deno.env.get("GCS_BUCKET_NAME");
 const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
-// const BACKEND_AUTH_TOKEN = Deno.env.get("BACKEND_AUTH_TOKEN");
-
-interface PendingImage {
-  id: string;
-  file_path: string;
-  width: number;
-  height: number;
-  orientation: string;
-}
 
 interface ProcessingStartResponse {
   attempt: number;
@@ -33,31 +22,43 @@ interface ProcessingStartResponse {
   }>;
 }
 
+interface ImageDetails {
+  id: string;
+  file_path: string;
+  width: number;
+  height: number;
+  orientation: string;
+  processing_status: string;
+}
+
 /**
- * Fetch pending images from backend
+ * Fetch image details from backend
  */
-async function fetchPendingImages(): Promise<PendingImage[]> {
+async function fetchImageDetails(imageId: string): Promise<ImageDetails> {
   if (!BACKEND_API_URL) {
     throw new Error("BACKEND_API_URL environment variable required");
   }
 
-  const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`, {
-    headers: {
-      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
-    },
-  });
-
+  const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`);
+  
   if (!response.ok) {
-    throw new Error(`Failed to fetch pending images: ${response.statusText}`);
+    throw new Error(`Failed to fetch image details: ${response.statusText}`);
   }
 
-  return await response.json();
+  const images = await response.json() as ImageDetails[];
+  const image = images.find(img => img.id === imageId);
+  
+  if (!image) {
+    throw new Error(`Image ${imageId} not found or not pending`);
+  }
+  
+  return image;
 }
 
 /**
  * Register processing attempt with backend
  */
-async function registerAttempt(imageId: string): Promise<ProcessingStartResponse> {
+async function registerAttempt(imageId: string, attempt: number): Promise<ProcessingStartResponse> {
   if (!BACKEND_API_URL) {
     throw new Error("BACKEND_API_URL environment variable required");
   }
@@ -65,10 +66,9 @@ async function registerAttempt(imageId: string): Promise<ProcessingStartResponse
   const response = await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/start`, {
     method: "POST",
     headers: {
-      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ attempt: TASK_ATTEMPT }),
+    body: JSON.stringify({ attempt }),
   });
 
   if (!response.ok) {
@@ -79,9 +79,29 @@ async function registerAttempt(imageId: string): Promise<ProcessingStartResponse
 }
 
 /**
- * Report processing failure to backend
+ * Report task failure after max retries to backend
  */
-async function reportFailure(imageId: string, error: string): Promise<void> {
+async function reportMaxRetriesFailed(imageId: string, error: string, attemptCount: number): Promise<void> {
+  if (!BACKEND_API_URL) {
+    throw new Error("BACKEND_API_URL environment variable required");
+  }
+
+  await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/failed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ 
+      error_message: error,
+      attempt_count: attemptCount,
+    }),
+  });
+}
+
+/**
+ * Report transient failure to backend (for legacy PATCH endpoint)
+ */
+async function reportTransientFailure(imageId: string, error: string, attempt: number): Promise<void> {
   if (!BACKEND_API_URL) {
     throw new Error("BACKEND_API_URL environment variable required");
   }
@@ -89,92 +109,133 @@ async function reportFailure(imageId: string, error: string): Promise<void> {
   await fetch(`${BACKEND_API_URL}/api/images/${imageId}/failed`, {
     method: "PATCH",
     headers: {
-      // "Authorization": `Bearer ${BACKEND_AUTH_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ error, attempt: TASK_ATTEMPT }),
+    body: JSON.stringify({ error, attempt }),
   });
 }
 
+// Create Hono app
+const app = new Hono();
+
+// Add logging middleware
+app.use("*", logger());
+
+// Health check endpoint
+app.get("/", (c) => {
+  return c.json({ 
+    status: "healthy", 
+    service: "slideshow-processor",
+    version: "2.0.0-cloud-tasks",
+  });
+});
+
 /**
- * Main entry point
+ * POST /process
+ * Process a single image from Cloud Tasks
  */
-async function main() {
-  console.log(`🚀 Task ${TASK_INDEX}/${TASK_COUNT} starting (attempt ${TASK_ATTEMPT})`);
-
-  if (!GCS_BUCKET_NAME) {
-    throw new Error("GCS_BUCKET_NAME environment variable required");
-  }
-
-  if (!BACKEND_API_URL) {
-    throw new Error("BACKEND_API_URL environment variable required");
-  }
-
-  // if (!BACKEND_AUTH_TOKEN) {
-  //   throw new Error("BACKEND_AUTH_TOKEN environment variable required");
-  // }
-
+app.post("/process", async (c) => {
+  const MAX_RETRIES = 3;
+  
   try {
-    // Fetch all pending images
-    const allImages = await fetchPendingImages();
-    console.log(`📋 Total pending images: ${allImages.length}`);
+    const body = await c.req.json();
+    const { imageId } = body;
 
-    // Shard: Each task only processes its assigned subset
-    const myImages = allImages.filter((_, index) => index % TASK_COUNT === TASK_INDEX);
-    console.log(`📦 Task ${TASK_INDEX} processing ${myImages.length} images`);
-
-    let processed = 0;
-    let failed = 0;
-
-    for (const image of myImages) {
-      try {
-        console.log(`\n🖼️  Processing ${image.id} (${processed + 1}/${myImages.length})`);
-        
-        // Register attempt and get device list
-        const startResponse = await registerAttempt(image.id);
-        console.log(`   Attempt ${startResponse.attempt}, targeting ${startResponse.devices.length} devices`);
-
-        // Process image for all devices
-        await processImage({
-          imageId: image.id,
-          sourcePath: image.file_path,
-          sourceWidth: image.width,
-          sourceHeight: image.height,
-          sourceOrientation: image.orientation,
-          devices: startResponse.devices,
-          bucketName: GCS_BUCKET_NAME,
-          backendApiUrl: BACKEND_API_URL,
-          // authToken: BACKEND_AUTH_TOKEN,
-        });
-
-        processed++;
-        console.log(`   ✅ Success`);
-      } catch (error) {
-        failed++;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`   ❌ Failed: ${errorMessage}`);
-        
-        // Report failure to backend
-        try {
-          await reportFailure(image.id, errorMessage);
-        } catch (reportError) {
-          console.error(`   ⚠️  Failed to report error to backend:`, reportError);
-        }
-      }
+    if (!imageId) {
+      return c.json({ error: "Missing imageId in request body" }, 400);
     }
 
-    console.log(`\n✨ Task ${TASK_INDEX} complete: ${processed} processed, ${failed} failed`);
-    
-    // Exit with error code if any failures
-    if (failed > 0) {
-      Deno.exit(1);
+    if (!GCS_BUCKET_NAME) {
+      return c.json({ error: "GCS_BUCKET_NAME not configured" }, 500);
     }
+
+    if (!BACKEND_API_URL) {
+      return c.json({ error: "BACKEND_API_URL not configured" }, 500);
+    }
+
+    // Get task attempt from Cloud Tasks header
+    const attemptHeader = c.req.header("X-CloudTasks-TaskExecutionCount");
+    const attempt = attemptHeader ? parseInt(attemptHeader) + 1 : 1;
+
+    console.log(`\n🖼️  Processing image ${imageId} (attempt ${attempt}/${MAX_RETRIES})`);
+
+    // Fetch image details
+    const image = await fetchImageDetails(imageId);
+    console.log(`   Found image: ${image.file_path}`);
+
+    // Register attempt and get device list
+    const startResponse = await registerAttempt(imageId, attempt);
+    console.log(`   Targeting ${startResponse.devices.length} devices`);
+
+    // Process image for all devices
+    await processImage({
+      imageId: image.id,
+      sourcePath: image.file_path,
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+      sourceOrientation: image.orientation,
+      devices: startResponse.devices,
+      bucketName: GCS_BUCKET_NAME,
+      backendApiUrl: BACKEND_API_URL,
+    });
+
+    console.log(`   ✅ Successfully processed ${imageId}`);
+    return c.json({ 
+      success: true, 
+      imageId,
+      devicesProcessed: startResponse.devices.length,
+    });
+
   } catch (error) {
-    console.error(`💥 Task ${TASK_INDEX} fatal error:`, error);
-    Deno.exit(1);
-  }
-}
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`   ❌ Processing failed: ${errorMessage}`);
 
-if (import.meta.main) {
-  main();
-}
+    try {
+      const body = await c.req.json();
+      const { imageId } = body;
+      const attemptHeader = c.req.header("X-CloudTasks-TaskExecutionCount");
+      const attempt = attemptHeader ? parseInt(attemptHeader) + 1 : 1;
+
+      if (attempt >= MAX_RETRIES) {
+        // Max retries reached - record as failed task
+        console.log(`   ⚠️  Max retries reached, recording failed task`);
+        await reportMaxRetriesFailed(imageId, errorMessage, attempt);
+        
+        // Return 200 to prevent Cloud Tasks from retrying
+        return c.json({ 
+          success: false, 
+          error: errorMessage,
+          maxRetriesReached: true,
+        }, 200);
+      } else {
+        // Transient failure - let Cloud Tasks retry
+        await reportTransientFailure(imageId, errorMessage, attempt);
+        
+        // Return 500 to trigger Cloud Tasks retry
+        return c.json({ 
+          error: errorMessage,
+          willRetry: true,
+          attempt,
+        }, 500);
+      }
+    } catch (reportError) {
+      console.error(`   ⚠️  Failed to report error:`, reportError);
+      // Return 500 to trigger retry if we can't report
+      return c.json({ error: errorMessage }, 500);
+    }
+  }
+});
+
+// Start server
+console.log(`🚀 Starting Image Processor HTTP Service`);
+console.log(`   GCS Bucket: ${GCS_BUCKET_NAME || '(not set)'}`);
+console.log(`   Backend API: ${BACKEND_API_URL || '(not set)'}`);
+console.log(`   Port: ${PORT}`);
+
+Deno.serve({ 
+  port: PORT,
+  hostname: "0.0.0.0",
+  onListen: ({ hostname, port }) => {
+    console.log(`✅ Server running on http://${hostname}:${port}`);
+  }
+}, app.fetch);

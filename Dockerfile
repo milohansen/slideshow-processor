@@ -10,10 +10,10 @@ COPY deno.json deno.lock ./
 ENV DENO_NODE_MODULES_DIR=auto
 
 # Pre-cache dependencies including source files for proper resolution
-COPY main.ts processor.ts ./
+COPY main.ts main-v2.ts processor.ts ./
 
 # Cache dependencies with lock file
-RUN deno cache --frozen main.ts processor.ts
+RUN deno cache --frozen main.ts main-v2.ts processor.ts
 
 # Final stage
 FROM denoland/deno:2.6.4
@@ -30,11 +30,11 @@ ENV DENO_DIR=/deno-dir
 
 # Copy source files
 COPY deno.json deno.lock ./
-COPY main.ts ./
+COPY main.ts main-v2.ts ./
 COPY processor.ts ./
 
 # Set production environment
 ENV DENO_ENV=production
 
-# Run the job
+# Default command (overridden by cloudbuild.yaml for v2)
 CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "main.ts"]
