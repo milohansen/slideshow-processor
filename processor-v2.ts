@@ -115,9 +115,9 @@ async function extractColors(imageBuffer: Buffer, maxResolution = 256): Promise<
   }
 
   if (pixels.length === 0) {
-    return { 
-      colors: ["#4285F4"], 
-      quantizedData: new Map([[0xff4285f4, 1]]) 
+    return {
+      colors: ["#4285F4"],
+      quantizedData: new Map([[0xff4285f4, 1]]),
     };
   }
 
@@ -147,12 +147,16 @@ async function saveQuantizedColors(blobHash: string, quantizedData: Map<number, 
     colorData[hex] = count;
   }
 
-  const jsonContent = JSON.stringify({
-    hash: blobHash,
-    timestamp: new Date().toISOString(),
-    colorCount: quantizedData.size,
-    colors: colorData,
-  }, null, 2);
+  const jsonContent = JSON.stringify(
+    {
+      hash: blobHash,
+      timestamp: new Date().toISOString(),
+      colorCount: quantizedData.size,
+      colors: colorData,
+    },
+    null,
+    2
+  );
 
   const path = `images/quantized/${blobHash}.json`;
   const file = storage.bucket(bucketName).file(path);
@@ -310,6 +314,20 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
   // Step 6b: Save quantized color data for future paired layout combinations
   const quantizedUri = await saveQuantizedColors(blobHash, quantizedData, bucketName);
   console.log(`  💾 Saved quantized colors: ${quantizedUri}`);
+
+  // Step 6c: Generate thumbnail (200x200 for UI preview)
+  console.log(`  🖼️  Generating thumbnail...`);
+  const thumbnailBuffer = await sharp(originalBuffer)
+    .resize(200, 200, {
+      fit: "cover",
+      position: "entropy",
+    })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+
+  const thumbnailPath = `processed/thumbnails/${source.id}.jpg`;
+  await uploadToGCS(thumbnailBuffer, thumbnailPath, bucketName);
+  console.log(`  ✅ Thumbnail uploaded: ${thumbnailPath}`);
 
   // Step 7: Generate device variants
   console.log(`  🖼️  Generating variants for ${deviceDimensions.length} device(s)...`);

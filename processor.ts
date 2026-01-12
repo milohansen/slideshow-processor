@@ -261,6 +261,20 @@ export async function processImage(options: ProcessImageOptions): Promise<void> 
   const colorPalette = await extractColors(sourceBuffer);
   console.log(`   ✅ Extracted colors: ${colorPalette.allColors.slice(0, 3).join(", ")}`);
 
+  // Generate thumbnail (200x200 for UI preview)
+  console.log(`   🖼️  Generating thumbnail...`);
+  const thumbnailBuffer = await sharp(sourceBuffer)
+    .resize(200, 200, {
+      fit: "cover",
+      position: "center",
+    })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+  
+  const thumbnailPath = `processed/thumbnails/${imageId}.jpg`;
+  const thumbnailUri = await uploadBufferToGCS(thumbnailBuffer, thumbnailPath, bucketName, "image/jpeg");
+  console.log(`   ✅ Thumbnail uploaded: ${thumbnailUri}`);
+
   const results: ProcessedImageResult[] = [];
 
   // Process for each device
