@@ -73,7 +73,7 @@ async function downloadSource(stagingPath: string): Promise<Buffer> {
  * Calculate SHA-256 hash of buffer
  */
 async function calculateHash(buffer: Buffer): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", new Uint8Array(buffer));
   return encodeHex(new Uint8Array(hashBuffer));
 }
 
