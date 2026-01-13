@@ -39,12 +39,35 @@ type ProcessingOptions = {
   checkBlobExists: (hash: string) => Promise<boolean>;
 };
 
-type ProcessingResult = {
+export type ProcessingResult = {
   status: "processed" | "duplicate";
   blobHash?: string;
-  blobData?: unknown;
-  colorData?: unknown;
-  variants: unknown[];
+  blobData?: {
+    storage_path: string;
+    width: number;
+    height: number;
+    aspect_ratio: number;
+    orientation: "portrait" | "landscape" | "square";
+    file_size: number;
+    mime_type: string;
+    exif_data: string | null;
+  };
+  colorData?: {
+    palette: string;
+    source: string;
+  };
+  variants: Variant[];
+};
+
+type LayoutType = "monotych" | "diptych" | "triptych";
+
+type Variant = {
+  width: number;
+  height: number;
+  orientation: "portrait" | "landscape" | "square";
+  layout_type: LayoutType;
+  storage_path: string;
+  file_size: number;
 };
 
 /**
@@ -352,7 +375,7 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
 
   // Step 7: Generate device variants
   console.log(`  🖼️  Generating variants for ${deviceDimensions.length} device(s)...`);
-  const variants = [];
+  const variants: Variant[] = [];
 
   for (const device of deviceDimensions) {
     const eligibleLayouts = evaluateImageLayouts(width, height, device);
@@ -389,7 +412,7 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
           width: layout.width,
           height: layout.height,
           orientation: determineOrientation(layout.width, layout.height),
-          layout_type: layout.layoutType,
+          layout_type: layout.layoutType as LayoutType,
           storage_path: variantGcsUri,
           file_size: resizedBuffer.length,
         });

@@ -255,7 +255,7 @@ async function main() {
     };
 
     // Step 5: Process image
-    await processSourceV2({
+    const result =await processSourceV2({
       source: {
         id: imageId,
         staging_path: startResponse.source.staging_path,
@@ -274,6 +274,15 @@ async function main() {
     });
 
     console.log(`   ✅ Successfully processed ${imageId}`);
+
+    const response = await fetch(`${BACKEND_API_URL}/api/processing/${imageId}/complete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(result),
+    });
+
     console.log(`\n✨ Job complete`);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
