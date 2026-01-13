@@ -369,7 +369,7 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
     .jpeg({ quality: 85 })
     .toBuffer();
 
-  const thumbnailPath = `processed/thumbnails/${source.id}.jpg`;
+  const thumbnailPath = `processed/thumbnails/${blobHash}`;
   await uploadToGCS(thumbnailBuffer, thumbnailPath, bucketName);
   console.log(`  ✅ Thumbnail uploaded: ${thumbnailPath}`);
 
