@@ -4,7 +4,7 @@
  * Triggered by Cloud Workflow via Cloud Tasks
  */
 
-import { Storage } from "@google-cloud/storage";
+import { Storage, File } from "@google-cloud/storage";
 import { Buffer } from "node:buffer";
 import sharp from "sharp";
 import { processSourceV2 } from "./processor-v2.ts";
@@ -24,7 +24,7 @@ type ProcessingStartResponse = {
     height: number;
     orientation: string;
   }>;
-}
+};
 
 type ImageDetails = {
   id: string;
@@ -33,7 +33,7 @@ type ImageDetails = {
   height: number;
   orientation: string;
   processing_status: string;
-}
+};
 
 /**
  * Check if original image exists in GCS and get its metadata
@@ -41,32 +41,45 @@ type ImageDetails = {
 async function findOriginalInGCS(imageId: string, bucketName: string): Promise<{ exists: boolean; hash?: string; buffer?: Buffer; width?: number; height?: number; orientation?: string }> {
   try {
     const bucket = storage.bucket(bucketName);
-    
+
+    let files: File[];
+
     // Check for any file in images/originals/ that starts with imageId
     // Format: images/originals/{hash}.{ext}
-    const [files] = await bucket.getFiles({
-      prefix: `images/originals/${imageId}`,
+    const [stagingFiles] = await bucket.getFiles({
+      prefix: `staging/${imageId}`,
       maxResults: 1,
     });
-    
-    if (files.length === 0) {
-      return { exists: false };
+
+    if (stagingFiles.length === 0) {
+      const [originalFiles] = await bucket.getFiles({
+        prefix: `images/originals/${imageId}`,
+        maxResults: 1,
+      });
+
+      if (originalFiles.length === 0) {
+        return { exists: false };
+      } else {
+        files = originalFiles;
+      }
+    } else {
+      files = stagingFiles;
     }
-    
+
     const file = files[0];
-    const fileName = file.name.split('/').pop() || '';
-    const hash = fileName.split('.')[0];
-    
+    const fileName = file.name.split("/").pop() || "";
+    const hash = fileName.split(".")[0];
+
     // Download file to get dimensions
     const [contents] = await file.download();
     const buffer = Buffer.from(contents);
-    
+
     // Get image metadata
     const metadata = await sharp(buffer).metadata();
     const width = metadata.width || 0;
     const height = metadata.height || 0;
-    const orientation = width > height ? 'landscape' : (height > width ? 'portrait' : 'square');
-    
+    const orientation = width > height ? "landscape" : height > width ? "portrait" : "square";
+
     return {
       exists: true,
       hash,
@@ -84,25 +97,25 @@ async function findOriginalInGCS(imageId: string, bucketName: string): Promise<{
 /**
  * Fetch image details from backend
  */
-async function fetchImageDetails(imageId: string): Promise<ImageDetails | null> {
-  if (!BACKEND_API_URL) {
-    return null;
-  }
+// async function fetchImageDetails(imageId: string): Promise<ImageDetails | null> {
+//   if (!BACKEND_API_URL) {
+//     return null;
+//   }
 
-  try {
-    const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`);
-    
-    if (!response.ok) {
-      return null;
-    }
+//   try {
+//     const response = await fetch(`${BACKEND_API_URL}/api/processing/pending?limit=50`);
 
-    const images = await response.json() as ImageDetails[];
-    return images.find(img => img.id === imageId) || null;
-  } catch (error) {
-    console.warn(`Could not fetch image details from backend:`, error);
-    return null;
-  }
-}
+//     if (!response.ok) {
+//       return null;
+//     }
+
+//     const images = (await response.json()) as ImageDetails[];
+//     return images.find((img) => img.id === imageId) || null;
+//   } catch (error) {
+//     console.warn(`Could not fetch image details from backend:`, error);
+//     return null;
+//   }
+// }
 
 /**
  * Register processing attempt with backend
@@ -119,7 +132,7 @@ async function registerAttempt(imageId: string, attempt: number, imageInfo?: { w
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         attempt,
         ...(imageInfo && { imageInfo }),
       }),
@@ -150,7 +163,7 @@ async function reportMaxRetriesFailed(imageId: string, error: string, attemptCou
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ 
+    body: JSON.stringify({
       error_message: error,
       attempt_count: attemptCount,
     }),
@@ -199,16 +212,16 @@ async function main() {
     // Step 1: Check if original exists in GCS
     console.log(`   Checking GCS for original...`);
     const gcsResult = await findOriginalInGCS(imageId, GCS_BUCKET_NAME);
-    
+
     if (!gcsResult.exists) {
       throw new Error(`Original image not found in GCS for ${imageId}`);
     }
-    
+
     console.log(`   Found original: ${gcsResult.hash} (${gcsResult.width}x${gcsResult.height})`);
 
     // Step 2: Try to fetch image details from backend (optional)
-    const backendImage = await fetchImageDetails(imageId);
-    
+    // const backendImage = await fetchImageDetails(imageId);
+
     // Step 3: Register attempt with backend (creates record if needed)
     const imageInfo = {
       width: gcsResult.width!,
@@ -216,15 +229,15 @@ async function main() {
       orientation: gcsResult.orientation!,
       filePath: `gs://${GCS_BUCKET_NAME}/images/originals/${gcsResult.hash}`,
     };
-    
+
     const startResponse = await registerAttempt(imageId, TASK_ATTEMPT, imageInfo);
     const devices = startResponse?.devices || [];
-    
+
     if (devices.length === 0) {
       console.warn(`   No devices available, skipping processing`);
       return;
     }
-    
+
     console.log(`   Targeting ${devices.length} devices`);
 
     // Step 4: Check if blob already exists
@@ -245,7 +258,7 @@ async function main() {
         staging_path: `gs://${GCS_BUCKET_NAME}/images/originals/${gcsResult.hash}`,
         origin: "gcs",
       },
-      deviceDimensions: devices.map(d => ({
+      deviceDimensions: devices.map((d) => ({
         width: d.width,
         height: d.height,
         orientation: d.orientation,
@@ -258,7 +271,6 @@ async function main() {
 
     console.log(`   ✅ Successfully processed ${imageId}`);
     console.log(`\n✨ Job complete`);
-
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`   ❌ Processing failed: ${errorMessage}`);
