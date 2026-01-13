@@ -20,6 +20,7 @@ type Source = {
 };
 
 type DeviceDimensions = {
+  id: string;
   width: number;
   height: number;
   orientation: string; // TODO: remove this, it can be derived from width/height
@@ -62,6 +63,7 @@ export type ProcessingResult = {
 type LayoutType = "monotych" | "diptych" | "triptych";
 
 type Variant = {
+  device: string;
   width: number;
   height: number;
   orientation: "portrait" | "landscape" | "square";
@@ -409,6 +411,7 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
         const _variantOutsideGcsUri = await uploadToGCS(resizedOutsideBuffer, variantOutsidePath, bucketName);
 
         variants.push({
+          device: device.id,
           width: layout.width,
           height: layout.height,
           orientation: determineOrientation(layout.width, layout.height),

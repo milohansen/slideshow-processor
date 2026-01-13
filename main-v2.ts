@@ -19,6 +19,7 @@ const BACKEND_API_URL = Deno.env.get("BACKEND_API_URL");
 type ProcessingStartResponse = {
   attempt: number;
   devices: Array<{
+    id: string;
     name: string;
     width: number;
     height: number;
@@ -262,6 +263,7 @@ async function main() {
         origin: "gcs",
       },
       deviceDimensions: devices.map((d) => ({
+        id: d.id,
         width: d.width,
         height: d.height,
         gap: d.gap,
