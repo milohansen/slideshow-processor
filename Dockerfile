@@ -30,8 +30,8 @@ ENV DENO_DIR=/deno-dir
 
 # Copy source files
 COPY deno.json deno.lock ./
-COPY main.ts main-v2.ts ./
-COPY processor.ts ./
+COPY main-v2.ts ./
+COPY processor-v2.ts ./
 
 # Set production environment
 ENV DENO_ENV=production
