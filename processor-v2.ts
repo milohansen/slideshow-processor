@@ -225,12 +225,15 @@ function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: D
 
   // Always include monotych (single image full screen)
   if (layouts.monotych) {
-    eligible.push({
-      layoutType: "monotych",
-      width: device.width,
-      height: device.height,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, device.width, device.height),
-    });
+    const cropPercentage = calculateCropPercentage(imageWidth, imageHeight, device.width, device.height);
+    if (cropPercentage <= 50) {
+      eligible.push({
+        layoutType: "monotych",
+        width: device.width,
+        height: device.height,
+        cropPercentage,
+      });
+    }
   }
 
   // Diptych (two images side by side)
@@ -242,12 +245,15 @@ function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: D
     } else {
       w = Math.floor((w - gap) / 2);
     }
-    eligible.push({
-      layoutType: "diptych",
-      width: w,
-      height: h,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, w, h),
-    });
+    const cropPercentage = calculateCropPercentage(imageWidth, imageHeight, w, h);
+    if (cropPercentage <= 50) {
+      eligible.push({
+        layoutType: "diptych",
+        width: w,
+        height: h,
+        cropPercentage,
+      });
+    }
   }
 
   // Triptych (three images side by side)
@@ -259,12 +265,15 @@ function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: D
     } else {
       w = Math.floor((w - gap * 2) / 3);
     }
-    eligible.push({
-      layoutType: "triptych",
-      width: w,
-      height: h,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, w, h),
-    });
+    const cropPercentage = calculateCropPercentage(imageWidth, imageHeight, w, h);
+    if (cropPercentage <= 50) {
+      eligible.push({
+        layoutType: "triptych",
+        width: w,
+        height: h,
+        cropPercentage,
+      });
+    }
   }
 
   // Sort by crop percentage (least crop first)
@@ -364,6 +373,17 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
         // Upload variant
         const variantPath = `processed/${layout.layoutType}/${layout.width}x${layout.height}/${blobHash}.jpg`;
         const variantGcsUri = await uploadToGCS(resizedBuffer, variantPath, bucketName);
+
+        const resizedOutsideBuffer = await sharp(originalBuffer)
+          .resize(layout.width, layout.height, {
+            fit: "outside",
+          })
+          .jpeg({ quality: 90 })
+          .toBuffer();
+
+        // Upload variant
+        const variantOutsidePath = `processed/${layout.layoutType}/${layout.width}x${layout.height}_outside/${blobHash}.jpg`;
+        const _variantOutsideGcsUri = await uploadToGCS(resizedOutsideBuffer, variantOutsidePath, bucketName);
 
         variants.push({
           width: layout.width,
