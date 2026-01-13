@@ -235,23 +235,35 @@ function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: D
 
   // Diptych (two images side by side)
   if (layouts.diptych) {
-    const diptychWidth = Math.floor((device.width - gap) / 2);
+    let w = device.width;
+    let h = device.height;
+    if (h > w) {
+      h = Math.floor((h - gap) / 2);
+    } else {
+      w = Math.floor((w - gap) / 2);
+    }
     eligible.push({
       layoutType: "diptych",
-      width: diptychWidth,
-      height: device.height,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, diptychWidth, device.height),
+      width: w,
+      height: h,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, w, h),
     });
   }
 
   // Triptych (three images side by side)
   if (layouts.triptych) {
-    const triptychWidth = Math.floor((device.width - gap * 2) / 3);
+    let w = device.width;
+    let h = device.height;
+    if (h > w) {
+      h = Math.floor((h - gap * 2) / 3);
+    } else {
+      w = Math.floor((w - gap * 2) / 3);
+    }
     eligible.push({
       layoutType: "triptych",
-      width: triptychWidth,
-      height: device.height,
-      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, triptychWidth, device.height),
+      width: w,
+      height: h,
+      cropPercentage: calculateCropPercentage(imageWidth, imageHeight, w, h),
     });
   }
 
@@ -265,7 +277,7 @@ function evaluateImageLayouts(imageWidth: number, imageHeight: number, device: D
  * Process a single source
  */
 export async function processSourceV2(options: ProcessingOptions): Promise<ProcessingResult> {
-  const { source, deviceDimensions, bucketName, checkBlobExists } = options;
+  const { source, deviceDimensions, bucketName } = options;
 
   // Step 1: Download original
   console.log(`  📥 Downloading from ${source.staging_path}`);
@@ -275,16 +287,16 @@ export async function processSourceV2(options: ProcessingOptions): Promise<Proce
   const blobHash = await calculateHash(originalBuffer);
   console.log(`  🔑 Hash: ${blobHash}`);
 
-  // Step 3: Check for duplicate
-  const exists = await checkBlobExists(blobHash);
-  if (exists) {
-    console.log(`  ♻️  Duplicate detected, skipping processing`);
-    return {
-      status: "duplicate",
-      blobHash,
-      variants: [],
-    };
-  }
+  // // Step 3: Check for duplicate
+  // const exists = await checkBlobExists(blobHash);
+  // if (exists) {
+  //   console.log(`  ♻️  Duplicate detected, skipping processing`);
+  //   return {
+  //     status: "duplicate",
+  //     blobHash,
+  //     variants: [],
+  //   };
+  // }
 
   // Step 4: Extract metadata
   const metadata = await sharp(originalBuffer).metadata();

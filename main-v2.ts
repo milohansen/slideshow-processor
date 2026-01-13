@@ -24,6 +24,10 @@ type ProcessingStartResponse = {
     height: number;
     orientation: string;
   }>;
+  source: {
+    id: string;
+    staging_path: string;
+  }
 };
 
 type ImageDetails = {
@@ -132,10 +136,10 @@ async function registerAttempt(imageId: string, attempt: number, imageInfo?: { w
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        attempt,
-        ...(imageInfo && { imageInfo }),
-      }),
+      // body: JSON.stringify({
+      //   attempt,
+      //   ...(imageInfo && { imageInfo }),
+      // }),
     });
 
     if (!response.ok) {
@@ -210,28 +214,26 @@ async function main() {
     console.log(`\n🖼️  Processing image ${imageId}`);
 
     // Step 1: Check if original exists in GCS
-    console.log(`   Checking GCS for original...`);
-    const gcsResult = await findOriginalInGCS(imageId, GCS_BUCKET_NAME);
+    // console.log(`   Checking GCS for original...`);
+    // const gcsResult = await findOriginalInGCS(imageId, GCS_BUCKET_NAME);
 
-    if (!gcsResult.exists) {
-      throw new Error(`Original image not found in GCS for ${imageId}`);
-    }
+    // if (!gcsResult.exists) {
+    //   throw new Error(`Original image not found in GCS for ${imageId}`);
+    // }
 
-    console.log(`   Found original: ${gcsResult.hash} (${gcsResult.width}x${gcsResult.height})`);
+    // console.log(`   Found original: ${gcsResult.hash} (${gcsResult.width}x${gcsResult.height})`);
 
     // Step 2: Try to fetch image details from backend (optional)
     // const backendImage = await fetchImageDetails(imageId);
 
-    // Step 3: Register attempt with backend (creates record if needed)
-    const imageInfo = {
-      width: gcsResult.width!,
-      height: gcsResult.height!,
-      orientation: gcsResult.orientation!,
-      filePath: `gs://${GCS_BUCKET_NAME}/images/originals/${gcsResult.hash}`,
-    };
+    const startResponse = await registerAttempt(imageId, TASK_ATTEMPT);
 
-    const startResponse = await registerAttempt(imageId, TASK_ATTEMPT, imageInfo);
-    const devices = startResponse?.devices || [];
+    if (!startResponse) {
+      console.warn("No attempt response. Cancelling.");
+      return;
+    }
+
+    const devices = startResponse.devices || [];
 
     if (devices.length === 0) {
       console.warn(`   No devices available, skipping processing`);
@@ -255,14 +257,14 @@ async function main() {
     await processSourceV2({
       source: {
         id: imageId,
-        staging_path: `gs://${GCS_BUCKET_NAME}/images/originals/${gcsResult.hash}`,
+        staging_path: startResponse.source.staging_path,
         origin: "gcs",
       },
       deviceDimensions: devices.map((d) => ({
         width: d.width,
         height: d.height,
         orientation: d.orientation,
-        layouts: { monotych: true },
+        layouts: { monotych: true, diptych: true },
       })),
       bucketName: GCS_BUCKET_NAME,
       backendApiUrl: BACKEND_API_URL || "",
