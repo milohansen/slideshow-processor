@@ -23,6 +23,7 @@ type ProcessingStartResponse = {
     width: number;
     height: number;
     orientation: string;
+    gap: number;
   }>;
   source: {
     id: string;
@@ -263,6 +264,7 @@ async function main() {
       deviceDimensions: devices.map((d) => ({
         width: d.width,
         height: d.height,
+        gap: d.gap,
         orientation: d.orientation,
         layouts: { monotych: true, diptych: true },
       })),
