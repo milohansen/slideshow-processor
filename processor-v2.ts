@@ -4,7 +4,7 @@
  */
 
 import { Storage } from "@google-cloud/storage";
-import { QuantizerCelebi, Score, argbFromRgb } from "@material/material-color-utilities";
+import { QuantizerCelebi, Score, argbFromRgb, hexFromArgb } from "@material/material-color-utilities";
 import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
 import { Buffer } from "node:buffer";
@@ -168,7 +168,7 @@ async function saveQuantizedColors(blobHash: string, quantizedData: Map<number, 
   const colorData: Record<string, number> = {};
   for (const [argb, count] of quantizedData.entries()) {
     // Store ARGB as hex string for JSON compatibility
-    const hex = "#" + (argb & 0xffffff).toString(16).padStart(6, "0").toUpperCase();
+    const hex = hexFromArgb(argb);
     colorData[hex] = count;
   }
 
